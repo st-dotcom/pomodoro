@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pomodoro Pro - Focus & Productivity</title>
+    <style>
+        :root {
+            --primary-red: #ff6b6b;
+            --primary-blue: #4dabf7;
+            --success-green: #51cf66;
+            --bg-gray: #f8f9fa;
+            --text-dark: #2d3436;
+            --card-shadow: 0 10px 25px rgba(0,0,0,0.08);
+        }
+
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif;
+            background-color: var(--bg-gray);
+            color: var(--text-dark);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .app-container {
+            background: #fff;
+            width: 90%;
+            max-width: 480px;
+            padding: 2rem;
+            border-radius: 20px;
+            box-shadow: var(--card-shadow);
+            text-align: center;
+        }
+
+        /* Stats Section */
+        .stats-header {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: var(--bg-gray);
+            padding: 10px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+        .stat-value {
+            display: block;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: var(--primary-red);
+        }
+
+        /* Timer Circle */
+        .timer-circle {
+            width: 220px;
+            height: 220px;
+            border: 8px solid var(--bg-gray);
+            border-radius: 50%;
+            margin: 0 auto 1.5rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            transition: all 0.4s ease;
+            position: relative;
+        }
+        .timer-circle.focus { border-color: var(--primary-red); }
+        .timer-circle.break { border-color: var(--primary-blue); }
+
+        #timer-label { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 2px; }
+        #time-display { font-size: 4rem; font-weight: 700; font-family: 'Courier New', monospace; }
+
+        /* Controls */
+        .input-form { display: flex; flex-direction: column; gap: 12px; }
+        input {
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+        .btn {
+            padding: 14px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-start { background: var(--primary-red); color: white; }
+        .btn-stop { background: #adb5bd; color: white; margin-top: 8px; }
+        .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+
+        /* Task Log */
+        .history-section {
+            margin-top: 2rem;
+            text-align: left;
+        }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--bg-gray);
+            padding-bottom: 5px;
+        }
+        #task-list {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        .task-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+        }
+        .badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: white;
+            font-size: 0.75rem;
+        }
+        .badge-done { background: var(--success-green); }
+        .badge-fail { background: #fa5252; }
+        .clear-data { font-size: 0.7rem; color: #aaa; cursor: pointer; text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <div class="stats-header">
+        <div class="stat-card">Total Focus<span id="stat-total-time" class="stat-value">0</span> min</div>
+        <div class="stat-card">Session Rate<span id="stat-rate" class="stat-value">0%</span></div>
+    </div>
+
+    <div id="timer-circle" class="timer-circle focus">
+        <div id="timer-label">Focus</div>
+        <div id="time-display">25:00</div>
+    </div>
+
+    <div class="input-form">
+        <input type="text" id="task-name" placeholder="What are you working on?">
+        <input type="datetime-local" id="deadline-time">
+        <button id="btn-main" class="btn btn-start">Start Session</button>
+        <button id="btn-stop" class="btn btn-stop" style="display:none;">Abort Session</button>
+    </div>
+
+    <div class="history-section">
+        <div class="history-header">
+            <h3>History</h3>
+            <span class="clear-data" id="clear-data">Clear all data</span>
+        </div>
+        <div id="task-list"></div>
+    </div>
+</div>
+
+<script>
+/**
+ * Pomodoro App - Core Logic
+ */
+const App = {
+    // Config
+    DURATION_FOCUS: 25 * 60,
+    DURATION_BREAK: 5 * 60,
+    STORAGE_KEY: 'pomodoro_pro_v1',
+
+    // State
+    state: {
+        totalFocusMinutes: 0,
+        completedSessions: 0,
+        failedSessions: 0,
+        history: []
+    },
+
+    timer: {
+        interval: null,
+        timeLeft: 0,
+        isBreak: false,
+        currentTask: ""
+    },
+
+    init() {
+        this.loadData();
+        this.cacheDOM();
+        this.bindEvents();
+        this.updateUI();
+        this.requestNotificationPermission();
+    },
+
+    cacheDOM() {
+        this.nodes = {
+            timeDisplay: document.getElementById('time-display'),
+            timerLabel: document.getElementById('timer-label'),
+            timerCircle: document.getElementById('timer-circle'),
+            taskInput: document.getElementById('task-name'),
+            deadlineInput: document.getElementById('deadline-time'),
+            btnMain: document.getElementById('btn-main'),
+            btnStop: document.getElementById('btn-stop'),
+            taskList: document.getElementById('task-list'),
+            totalTime: document.getElementById('stat-total-time'),
+            rate: document.getElementById('stat-rate'),
+            clearData: document.getElementById('clear-data')
+        };
+    },
+
+    bindEvents() {
+        this.nodes.btnMain.addEventListener('click', () => this.startSession());
+        this.nodes.btnStop.addEventListener('click', () => this.abortSession());
+        this.nodes.clearData.addEventListener('click', () => this.clearAllData());
+    },
+
+    // Session Management
+    startSession() {
+        if (this.timer.interval) return;
+
+        const task = this.nodes.taskInput.value.trim() || "Untitled Task";
+        this.timer.currentTask = task;
+        this.timer.timeLeft = this.timer.isBreak ? this.DURATION_BREAK : this.DURATION_FOCUS;
+        
+        this.toggleUI(true);
+        
+        this.timer.interval = setInterval(() => {
+            this.timer.timeLeft--;
+            this.tick();
+        }, 1000);
+    },
+
+    tick() {
+        this.updateTimerDisplay();
+        this.checkDeadline();
+
+        if (this.timer.timeLeft <= 0) {
+            this.completeSession();
+        }
+    },
+
+    completeSession() {
+        clearInterval(this.timer.interval);
+        this.timer.interval = null;
+
+        if (!this.timer.isBreak) {
+            this.state.totalFocusMinutes += 25;
+            this.state.completedSessions++;
+            this.addHistory(this.timer.currentTask, 'Completed');
+            this.notify("Focus Finished!", "Take a 5-minute break.");
+            
+            // Switch to Break
+            this.timer.isBreak = true;
+            this.startSession(); 
+        } else {
+            this.timer.isBreak = false;
+            this.notify("Break Over!", "Ready for the next task?");
+            this.toggleUI(false);
+        }
+        this.saveData();
+        this.updateUI();
+    },
+
+    abortSession() {
+        if (!confirm("Stop this session? It will be marked as incomplete.")) return;
+
+        clearInterval(this.timer.interval);
+        this.timer.interval = null;
+
+        if (!this.timer.isBreak) {
+            this.state.failedSessions++;
+            this.addHistory(this.timer.currentTask, 'Aborted');
+        }
+
+        this.timer.isBreak = false;
+        this.saveData();
+        this.updateUI();
+        this.toggleUI(false);
+    },
+
+    // Data Management
+    saveData() {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.state));
+    },
+
+    loadData() {
+        const saved = localStorage.getItem(this.STORAGE_KEY);
+        if (saved) {
+            this.state = JSON.parse(saved);
+        }
+    },
+
+    clearAllData() {
+        if (confirm("Delete all history and stats?")) {
+            localStorage.removeItem(this.STORAGE_KEY);
+            location.reload();
+        }
+    },
+
+    addHistory(name, status) {
+        this.state.history.unshift({
+            name,
+            status,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        // Keep only last 20
+        if (this.state.history.length > 20) this.state.history.pop();
+    },
+
+    // UI Updates
+    updateUI() {
+        this.nodes.totalTime.textContent = this.state.totalFocusMinutes;
+        const total = this.state.completedSessions + this.state.failedSessions;
+        const rate = total === 0 ? 0 : Math.round((this.state.completedSessions / total) * 100);
+        this.nodes.rate.textContent = `${rate}%`;
+
+        this.nodes.taskList.innerHTML = this.state.history.map(item => `
+            <div class="task-item">
+                <span><strong>${item.name}</strong> <small>(${item.time})</small></span>
+                <span class="badge ${item.status === 'Completed' ? 'badge-done' : 'badge-fail'}">${item.status}</span>
+            </div>
+        `).join('');
+
+        this.updateTimerDisplay();
+    },
+
+    updateTimerDisplay() {
+        const time = this.timer.interval ? this.timer.timeLeft : (this.timer.isBreak ? this.DURATION_BREAK : this.DURATION_FOCUS);
+        const m = Math.floor(time / 60);
+        const s = time % 60;
+        this.nodes.timeDisplay.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        
+        this.nodes.timerLabel.textContent = this.timer.isBreak ? "Break" : "Focus";
+        this.nodes.timerCircle.className = `timer-circle ${this.timer.isBreak ? 'break' : 'focus'}`;
+    },
+
+    toggleUI(running) {
+        this.nodes.btnMain.style.display = running ? 'none' : 'block';
+        this.nodes.btnStop.style.display = running ? 'block' : 'none';
+        this.nodes.taskInput.disabled = running;
+        this.nodes.deadlineInput.disabled = running;
+    },
+
+    // Utilities
+    checkDeadline() {
+        const deadline = this.nodes.deadlineInput.value;
+        if (!deadline) return;
+
+        const target = new Date(deadline).getTime();
+        const now = new Date().getTime();
+
+        // Check if deadline is reached within this second
+        if (now >= target && now < target + 1500) {
+            this.notify("Deadline Alert!", `Task: ${this.timer.currentTask}`);
+        }
+    },
+
+    requestNotificationPermission() {
+        if ("Notification" in window) {
+            Notification.requestPermission();
+        }
+    },
+
+    notify(title, body) {
+        if ("Notification" in window && Notification.permission === "granted") {
+            new Notification(title, { body });
+        } else {
+            alert(`${title}\n${body}`);
+        }
+    }
+};
+
+// Initialize App
+document.addEventListener('DOMContentLoaded', () => App.init());
+
+</script>
+</body>
+</html>
